@@ -1,0 +1,102 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  password  String
+  role      String   // 'admin', 'doctor', 'receptionist'
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  doctorProfile Doctor?
+  appointments  Appointment[] @relation("DoctorAppointments")
+}
+
+model Patient {
+  id             Int      @id @default(autoincrement())
+  name           String
+  email          String?  @unique
+  phone          String
+  dateOfBirth    DateTime
+  address        String?
+  medicalHistory String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  appointments Appointment[]
+  queueTokens  QueueToken[]
+}
+
+model Doctor {
+  id             Int      @id @default(autoincrement())
+  userId         Int      @unique
+  specialization String
+  licenseNumber  String   @unique
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appointments Appointment[]
+  queueTokens  QueueToken[]
+}
+
+model Appointment {
+  id          Int      @id @default(autoincrement())
+  patientId   Int
+  doctorId    Int
+  doctorUserId Int
+  appointmentDate DateTime
+  status      String   // 'scheduled', 'completed', 'cancelled'
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor  Doctor  @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  doctorUser User @relation("DoctorAppointments", fields: [doctorUserId], references: [id], onDelete: Cascade)
+  
+  // DATA INTEGRITY FIX: Composite unique constraint prevents double-booking
+  // Ensures that a doctor cannot have multiple active appointments at the exact same time
+  // This constraint is enforced at the database level for maximum reliability
+  @@unique([doctorId, appointmentDate], name: "unique_doctor_appointment_slot")
+  
+  // Performance indexes for common queries
+  @@index([doctorId, appointmentDate])
+  @@index([patientId, appointmentDate])
+  @@index([status])
+}
+
+model QueueToken {
+  id          Int      @id @default(autoincrement())
+  patientId   Int
+  doctorId    Int
+  appointmentId Int?
+  tokenNumber Int
+  status      String   // 'waiting', 'called', 'completed'
+  priority    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor  Doctor  @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  
+  // Composite index to optimize token number queries per doctor per day
+  @@index([doctorId, createdAt])
+  @@index([doctorId, tokenNumber])
+}

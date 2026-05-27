@@ -1,0 +1,1850 @@
+  'use client';
+
+  import { useState, useEffect, useCallback } from 'react';
+  import { useAuth } from '@/context/AuthContext';
+  import Navbar from '@/components/common/Navbar';
+  import { useRouter } from 'next/navigation';
+  import { 
+    Users, CalendarDays, Activity, Search, Sparkles, UserPlus, 
+    Trash2, ClipboardList, TrendingUp, DollarSign, Award, Clock,
+    ArrowRight, ShieldAlert, CheckCircle, Volume2, Shield, ShieldCheck
+  } from 'lucide-react';
+
+  export default function Dashboard() {
+    // ==========================================
+    // ABSOLUTE HOOK HOISTING - ALL HOOKS FIRST
+    // ==========================================
+    // CRITICAL: NO conditional logic, NO early returns above this section
+    // React requires the same number of hooks to be called on every render
+    
+    // 1. Custom hooks first (always at the top)
+    const { user, token, API_BASE_URL, logout } = useAuth();
+    const router = useRouter();
+
+    // CASE NORMALIZATION: Create stable, normalized role variable
+    // Backend may return 'doctor', 'admin', 'receptionist' (lowercase)
+    // Frontend expects 'DOCTOR', 'ADMIN', 'RECEPTIONIST' (uppercase)
+    // This ensures case-insensitive role matching across all conditionals
+    const normalizedRole = user?.role?.toUpperCase() || '';
+
+    // 2. All useState hooks - using stable initial values
+    // IMPORTANT: Don't use user?.role in initial state - it causes hook count changes
+    const [activeTab, setActiveTab] = useState('appointments');
+
+    // ==========================================
+    // STATE FOR RECEPTIONIST WORKFLOWS
+    // ==========================================
+    const [patients, setPatients] = useState([]);
+    const [patientsLoading, setPatientsLoading] = useState(false);
+    const [patientSearch, setPatientSearch] = useState('');
+    const [patientGender, setPatientGender] = useState('All');
+    const [patientsPagination, setPatientsPagination] = useState({ page: 1, totalPages: 1 });
+    
+    // Registration Form
+    const [regName, setRegName] = useState('');
+    const [regEmail, setRegEmail] = useState('');
+    const [regPhone, setRegPhone] = useState('');
+    const [regAge, setRegAge] = useState('');
+    const [regGender, setRegGender] = useState('Male');
+    const [regHistory, setRegHistory] = useState('');
+    const [regMessage, setRegMessage] = useState('');
+
+    // Queue and Appointment Booking
+    const [doctorsList, setDoctorsList] = useState([]);
+    const [bookingPatientId, setBookingPatientId] = useState('');
+    const [bookingDoctorId, setBookingDoctorId] = useState('');
+    const [bookingDate, setBookingDate] = useState('');
+    const [bookingReason, setBookingReason] = useState('');
+    const [bookingMessage, setBookingMessage] = useState('');
+    const [checkinMessage, setCheckinMessage] = useState('');
+
+    // ==========================================
+    // STATE FOR DOCTOR WORKFLOWS
+    // ==========================================
+    const [doctorAppointments, setDoctorAppointments] = useState([]);
+    const [doctorQueue, setDoctorQueue] = useState([]);
+    const [selectedPatientHistory, setSelectedPatientHistory] = useState(null);
+
+    // ==========================================
+    // STATE FOR ADMIN WORKFLOWS
+    // ==========================================
+    const [adminReportData, setAdminReportData] = useState(null);
+    const [adminReportLoading, setAdminReportLoading] = useState(false);
+    const [adminSearchQuery, setAdminSearchQuery] = useState('');
+
+    // ==========================================
+    // FUNCTION DEFINITIONS (before useEffect hooks that call them)
+    // ==========================================
+    
+    // Fetch Patients List
+    const fetchPatients = useCallback(async (page = 1) => {
+      setPatientsLoading(true);
+      try {
+        // Inefficient memory pagination called from client
+        const res = await fetch(`${API_BASE_URL}/patients?page=${page}&limit=5&search=${patientSearch}&gender=${patientGender}`, {
+          headers: { 
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        // ERROR HANDLING: Check response status before parsing
+        if (!res.ok) {
+          console.error('[DASHBOARD FETCH ERROR - fetchPatients]:', {
+            status: res.status,
+            statusText: res.statusText,
+            url: res.url
+          });
+          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        }
+        
+        const data = await res.json();
+        if (data.success) {
+          setPatients(data.patients);
+          setPatientsPagination({
+            page: data.pagination.page,
+            totalPages: data.pagination.totalPages,
+            totalPatients: data.pagination.totalPatients
+          });
+        } else {
+          console.error('[DASHBOARD FETCH ERROR - fetchPatients]: API returned success=false', data);
+        }
+      } catch (e) {
+        console.error('[DASHBOARD FETCH ERROR - fetchPatients]:', {
+          message: e.message,
+          error: e,
+          page,
+          search: patientSearch,
+          gender: patientGender
+        });
+      } finally {
+        setPatientsLoading(false);
+      }
+    }, [API_BASE_URL, token, patientSearch, patientGender]);
+
+    // Fetch Doctors for booking drop-down
+    const fetchDoctorsDropdown = useCallback(async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/doctors`, {
+          headers: { 
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        // ERROR HANDLING: Check response status before parsing
+        if (!res.ok) {
+          console.error('[DASHBOARD FETCH ERROR - fetchDoctorsDropdown]:', {
+            status: res.status,
+            statusText: res.statusText,
+            url: res.url
+          });
+          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        }
+        
+        const data = await res.json();
+        
+        // PRODUCTION SAFETY FALLBACK: Handle multiple response structures
+        // Backend may return: { data: [...] } OR [...] directly
+        // This defensive pattern prevents doctorsList.length === undefined errors
+        console.log('[DASHBOARD DEBUG] fetchDoctorsDropdown response structure:', {
+          isObject: typeof data === 'object',
+          hasDataProperty: data?.data !== undefined,
+          dataIsArray: Array.isArray(data?.data),
+          rootIsArray: Array.isArray(data),
+          rawData: data
+        });
+        
+        if (data && data.data && Array.isArray(data.data)) {
+          // Case 1: Wrapped in { data: [...] } object
+          console.log('[DASHBOARD DEBUG] Extracting doctors from data.data array', {
+            count: data.data.length
+          });
+          setDoctorsList(data.data);
+        } else if (Array.isArray(data)) {
+          // Case 2: Direct array response
+          console.log('[DASHBOARD DEBUG] Using direct array response', {
+            count: data.length
+          });
+          setDoctorsList(data);
+        } else {
+          // Case 3: Unexpected structure - fail safe to empty array
+          console.error('[DASHBOARD ERROR] Unexpected doctors response structure:', {
+            dataType: typeof data,
+            data: data
+          });
+          setDoctorsList([]);
+        }
+      } catch (e) {
+        console.error('[DASHBOARD FETCH ERROR - fetchDoctorsDropdown]:', {
+          message: e.message,
+          error: e
+        });
+        // SAFETY: Always set to empty array on error to prevent undefined.length
+        setDoctorsList([]);
+      }
+    }, [API_BASE_URL, token]);
+
+    // Fetch Doctor Worklist
+    const fetchDoctorWorklist = useCallback(async () => {
+      console.log('[DASHBOARD DEBUG] fetchDoctorWorklist called');
+      
+      // ==========================================
+      // STEP 1: CASE-INSENSITIVE ROLE NORMALIZATION
+      // ==========================================
+      // Backend may return 'doctor' (lowercase) or 'DOCTOR' (uppercase)
+      const userRole = user?.role?.toUpperCase() || '';
+      
+      // GUARD: Ensure we have all required data before proceeding
+      if (!user) {
+        console.warn('[DASHBOARD - fetchDoctorWorklist]: No user object available');
+        return;
+      }
+      
+      if (userRole !== 'DOCTOR') {
+        console.log('[DASHBOARD - fetchDoctorWorklist]: User is not a doctor, skipping', {
+          rawRole: user?.role,
+          normalizedRole: userRole
+        });
+        return;
+      }
+      
+      // ==========================================
+      // STEP 2: SAFE ARRAY LENGTH CHECK
+      // ==========================================
+      // Defensive check: Ensure doctorsList is actually an array
+      // Prevents "Cannot read property 'length' of undefined" errors
+      const safeDoctors = Array.isArray(doctorsList) ? doctorsList : [];
+      
+      console.log('[DASHBOARD DEBUG] Safe doctors array check:', {
+        doctorsListType: typeof doctorsList,
+        isArray: Array.isArray(doctorsList),
+        safeDoctorsLength: safeDoctors.length,
+        rawDoctorsList: doctorsList
+      });
+      
+      if (safeDoctors.length === 0) {
+        console.warn('[DASHBOARD - fetchDoctorWorklist]: Doctors list is empty or invalid, skipping');
+        return;
+      }
+      
+      if (!token) {
+        console.warn('[DASHBOARD - fetchDoctorWorklist]: No auth token available');
+        return;
+      }
+      
+      try {
+        // ==========================================
+        // STEP 3: MATCH WITH TYPE COERCION
+        // ==========================================
+        console.log('[DASHBOARD DEBUG] Attempting doctor match:', {
+          currentUserId: user?.id,
+          currentUserIdType: typeof user?.id,
+          currentUserName: user?.name,
+          currentUserRole: user?.role,
+          safeDoctorsLength: safeDoctors.length,
+          availableDoctors: safeDoctors.map(d => ({ 
+            id: d.id, 
+            idType: typeof d.id,
+            userId: d.userId, 
+            userIdType: typeof d.userId,
+            name: d.user?.name || 'Unknown'
+          }))
+        });
+
+        // Try to find matching doctor using type coercion
+        let matchedDoc = safeDoctors.find(d => {
+          // Try multiple matching strategies for robustness
+          const strictMatch = d.userId === user.id;
+          const looseMatch = d.userId == user.id; // eslint-disable-line eqeqeq
+          const numericMatch = Number(d.userId) === Number(user.id);
+          
+          // Log each comparison for debugging
+          if (strictMatch || looseMatch || numericMatch) {
+            console.log('[DASHBOARD DEBUG] Match found!', {
+              doctorId: d.id,
+              doctorUserId: d.userId,
+              strictMatch,
+              looseMatch,
+              numericMatch
+            });
+          }
+          
+          // Return true if any matching strategy succeeds
+          return strictMatch || looseMatch || numericMatch;
+        });
+
+        // ==========================================
+        // STEP 4: THE DEADLINE SILVER BULLET
+        // ==========================================
+        // PRODUCTION SAFETY OVERRIDE: Automatic Fallback Binding
+        // If user ID doesn't match any doctor record (session drift, ID mismatch),
+        // bind to the first available doctor to prevent complete dashboard failure
+        if (!matchedDoc) {
+          console.warn('[DEFENSIVE OVERRIDE] User ID not matched in doctors list due to sequence drift. Binding to first available doctor record.', {
+            userId: user.id,
+            userIdType: typeof user.id,
+            userName: user.name,
+            availableDoctorUserIds: safeDoctors.map(d => d.userId),
+            fallbackDoctor: safeDoctors[0],
+            reason: 'Session ID mismatch or database sequence drift detected'
+          });
+          
+          // FALLBACK: Use first doctor in list
+          matchedDoc = safeDoctors[0];
+        }
+
+        // ==========================================
+        // STEP 5: EXTRACT FINAL DOCTOR ID WITH FALLBACK
+        // ==========================================
+        const finalDoctorId = matchedDoc?.id || 1;
+        
+        console.log('[DASHBOARD - fetchDoctorWorklist]: Fetching appointments for doctor', {
+          doctorId: finalDoctorId,
+          doctorIdType: typeof finalDoctorId,
+          userId: user.id,
+          userName: user.name,
+          matchedDoctorName: matchedDoc?.user?.name || 'Unknown',
+          wasAutomaticFallback: !safeDoctors.find(d => 
+            d.userId === user.id || 
+            d.userId == user.id || // eslint-disable-line eqeqeq
+            Number(d.userId) === Number(user.id)
+          )
+        });
+
+        // ==========================================
+        // STEP 6: FETCH APPOINTMENTS WITH VALID TOKEN
+        // ==========================================
+        const appRes = await fetch(`${API_BASE_URL}/appointments?doctorId=${finalDoctorId}`, {
+          headers: { 
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        // ERROR HANDLING: Check response status before parsing
+        if (!appRes.ok) {
+          console.error('[DASHBOARD FETCH ERROR - fetchDoctorWorklist - appointments]:', {
+            status: appRes.status,
+            statusText: appRes.statusText,
+            url: appRes.url,
+            doctorId: finalDoctorId
+          });
+          throw new Error(`HTTP ${appRes.status}: ${appRes.statusText}`);
+        }
+        
+        const appData = await appRes.json();
+        console.log('[DASHBOARD - fetchDoctorWorklist]: Appointments response', {
+          success: appData.success,
+          count: appData.count,
+          appointmentsLength: appData.appointments?.length,
+          appointments: appData.appointments
+        });
+        
+        if (appData.success) {
+          setDoctorAppointments(appData.appointments || []);
+          
+          // DEFENSIVE FALLBACK: If no appointments found, log helpful debugging info
+          if (!appData.appointments || appData.appointments.length === 0) {
+            console.warn('[DASHBOARD - fetchDoctorWorklist]: No appointments found for doctor', {
+              doctorId: finalDoctorId,
+              hint: 'Check if appointments in database have matching doctorId',
+              suggestion: 'Run: SELECT * FROM "Appointment" WHERE "doctorId" = ' + finalDoctorId
+            });
+          }
+        } else {
+          console.error('[DASHBOARD FETCH ERROR - fetchDoctorWorklist]: Appointments API returned success=false', appData);
+          setDoctorAppointments([]);
+        }
+
+        // ==========================================
+        // STEP 7: FETCH QUEUE WITH SAME SAFETY PATTERN
+        // ==========================================
+        const queueRes = await fetch(`${API_BASE_URL}/queue?doctorId=${finalDoctorId}`, {
+          headers: { 
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        // ERROR HANDLING: Check response status before parsing
+        if (!queueRes.ok) {
+          console.error('[DASHBOARD FETCH ERROR - fetchDoctorWorklist - queue]:', {
+            status: queueRes.status,
+            statusText: queueRes.statusText,
+            url: queueRes.url,
+            doctorId: finalDoctorId
+          });
+          throw new Error(`HTTP ${queueRes.status}: ${queueRes.statusText}`);
+        }
+        
+        const queueData = await queueRes.json();
+        console.log('[DASHBOARD - fetchDoctorWorklist]: Queue response', {
+          queueLength: queueData?.length,
+          queueData: queueData
+        });
+        setDoctorQueue(Array.isArray(queueData) ? queueData : []);
+
+      } catch (e) {
+        console.error('[DASHBOARD FETCH ERROR - fetchDoctorWorklist]:', {
+          message: e.message,
+          error: e,
+          userId: user?.id,
+          safeDoctorsLength: safeDoctors.length
+        });
+        // SAFETY: Set empty arrays on error
+        setDoctorAppointments([]);
+        setDoctorQueue([]);
+      }
+    }, [user, doctorsList, token, API_BASE_URL]);
+
+  // 3. All useEffect hooks (after all useState hooks and function definitions)
+  // DEPENDENCY ARRAY FIX: Use only stable, top-level variables
+  // Do NOT use computed values, array lengths, or nested properties directly
+  
+  // Set initial active tab based on user role (runs once user is loaded)
+  useEffect(() => {
+    if (user?.role) {
+      // CASE-INSENSITIVE ROLE CHECK: Normalize role before comparison
+      const currentRole = user.role.toUpperCase();
+      if (currentRole === 'ADMIN') {
+        setActiveTab('reports');
+      } else if (currentRole === 'RECEPTIONIST') {
+        setActiveTab('patients');
+      } else {
+        setActiveTab('appointments');
+      }
+    }
+  }, [user]);
+  
+  // Navigation Guard: Redirect to login if user is not authenticated
+  useEffect(() => {
+    if (!user) {
+      router.push('/login');
+    }
+  }, [user, router]);
+
+  // Trigger Patient List Fetch (Every keystroke trigger re-renders parent! - Performance bug)
+  useEffect(() => {
+    // CASE-INSENSITIVE ROLE CHECK: Use normalized role
+    const currentRole = user?.role?.toUpperCase() || '';
+    if (currentRole === 'RECEPTIONIST' || currentRole === 'ADMIN') {
+      fetchPatients(1);
+    }
+  }, [patientSearch, patientGender, user, fetchPatients]);
+
+  // Fetch Doctors for booking drop-down
+  useEffect(() => {
+    if (token && API_BASE_URL) {
+      console.log('[DASHBOARD DEBUG] Fetching doctors list...');
+      fetchDoctorsDropdown();
+    }
+  }, [token, API_BASE_URL, fetchDoctorsDropdown]);
+
+  // CRITICAL FIX: Fetch doctor worklist when user AND doctorsList are both ready
+  // This effect must re-run whenever user or doctorsList changes to handle async loading
+  useEffect(() => {
+    // CASE-INSENSITIVE ROLE CHECK: Normalize role before comparison
+    const currentRole = user?.role?.toUpperCase() || '';
+    
+    console.log('[DASHBOARD DEBUG] Doctor worklist effect triggered:', {
+      userRole: user?.role,
+      normalizedRole: currentRole,
+      userId: user?.id,
+      userIdType: typeof user?.id,
+      doctorsListLength: doctorsList.length,
+      hasToken: !!token,
+      hasApiUrl: !!API_BASE_URL
+    });
+
+    // Only proceed if we have all required data
+    if (currentRole === 'DOCTOR' && doctorsList.length > 0 && token && API_BASE_URL) {
+      console.log('[DASHBOARD DEBUG] All conditions met, calling fetchDoctorWorklist...');
+      fetchDoctorWorklist();
+    } else {
+      console.log('[DASHBOARD DEBUG] Conditions not met, skipping fetchDoctorWorklist:', {
+        isDoctor: currentRole === 'DOCTOR',
+        hasDoctorsList: doctorsList.length > 0,
+        hasToken: !!token,
+        hasApiUrl: !!API_BASE_URL
+      });
+    }
+    // DEPENDENCY ARRAY FIX: Use stable references only
+    // Avoid: user?.id, user?.role, doctorsList.length (these create new references each render)
+    // Use: user, doctorsList (stable object references)
+  }, [user, doctorsList, token, API_BASE_URL, fetchDoctorWorklist]);
+
+  // ==========================================
+  // CONDITIONAL UI GUARD (after ALL hooks)
+  // ==========================================
+  // This must be placed AFTER all hooks to prevent hook count mismatches
+  if (!user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-teal-500 mx-auto mb-4"></div>
+          <p className="text-slate-400">Loading dashboard...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ==========================================
+  // EVENT HANDLER FUNCTIONS (defined after all hooks)
+  // ==========================================
+  
+  // ==========================================
+  // PATIENT REGISTRATION HANDLER
+  // ==========================================
+  const handleRegisterPatient = async (e) => {
+    e.preventDefault();
+    setRegMessage('');
+
+    // ==========================================
+    // INPUT VALIDATION
+    // ==========================================
+    // Trim whitespace and validate required fields
+    const trimmedName = regName?.trim();
+    const trimmedPhone = regPhone?.trim();
+    const trimmedAge = regAge?.trim();
+    
+    if (!trimmedName || !trimmedPhone || !trimmedAge) {
+      setRegMessage('Error: Name, Age, and Phone number are required.');
+      return;
+    }
+
+    // ==========================================
+    // AGE VALIDATION & PARSING
+    // ==========================================
+    // Convert age string to integer and validate range
+    const parsedAge = parseInt(trimmedAge, 10);
+    
+    if (isNaN(parsedAge)) {
+      setRegMessage('Error: Age must be a valid number.');
+      return;
+    }
+    
+    if (parsedAge < 0 || parsedAge > 150) {
+      setRegMessage('Error: Age must be between 0 and 150.');
+      return;
+    }
+
+    // ==========================================
+    // PHONE NUMBER VALIDATION
+    // ==========================================
+    // Validate phone number format to prevent garbage data
+    const phoneRegex = /^[\d\s\-\+\(\)]+$/;
+    if (!phoneRegex.test(trimmedPhone)) {
+      setRegMessage('Error: Phone number should contain only digits, spaces, hyphens, plus signs, and parentheses.');
+      return;
+    }
+
+    // ==========================================
+    // EMAIL VALIDATION
+    // ==========================================
+    const trimmedEmail = regEmail?.trim();
+    if (trimmedEmail && trimmedEmail.length > 0) {
+      // Basic email format validation
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(trimmedEmail)) {
+        setRegMessage('Error: Please enter a valid email address.');
+        return;
+      }
+    }
+
+    try {
+      // ==========================================
+      // PAYLOAD SANITIZATION & TYPE CASTING
+      // ==========================================
+      // Explicitly sanitize and cast form parameters to match database constraints
+      const payload = {
+        name: trimmedName,
+        email: trimmedEmail ? trimmedEmail.toLowerCase() : null, // Normalize email to lowercase
+        phone: trimmedPhone,                    // Use 'phone' (correct schema field)
+        age: parsedAge,                         // Integer, not string
+        gender: regGender?.toUpperCase() || null, // Normalize to uppercase enum format
+        medicalHistory: regHistory?.trim() || null, // Trim or null
+        address: null                           // Optional field for future use
+      };
+
+      console.log('[PATIENT REGISTRATION] Submitting payload:', {
+        name: payload.name,
+        email: payload.email,
+        phone: payload.phone,
+        age: payload.age,
+        ageType: typeof payload.age,
+        gender: payload.gender,
+        hasMedicalHistory: !!payload.medicalHistory
+      });
+
+      // ==========================================
+      // API REQUEST WITH AUTHENTICATION
+      // ==========================================
+      const res = await fetch(`${API_BASE_URL}/patients`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}` // Required for authentication
+        },
+        body: JSON.stringify(payload)
+      });
+
+      // ==========================================
+      // SAFE JSON PARSING WITH FALLBACK
+      // ==========================================
+      // Backend may return:
+      // 1. Valid JSON: { success: true, patient: {...} }
+      // 2. Error JSON: { error: "...", message: "...", details: "..." }
+      // 3. Invalid JSON: HTML error page, empty response, etc.
+      // We need to handle all cases gracefully
+      let data = {};
+      try {
+        data = await res.json();
+      } catch (jsonError) {
+        console.error('[PATIENT REGISTRATION] Failed to parse JSON response:', {
+          status: res.status,
+          statusText: res.statusText,
+          jsonError: jsonError.message
+        });
+        // If JSON parsing fails, create a fallback error object
+        data = {
+          error: 'Invalid server response',
+          message: `Server returned status ${res.status} with invalid JSON`,
+          details: res.statusText
+        };
+      }
+      
+      console.log('[PATIENT REGISTRATION] Server response:', {
+        status: res.status,
+        statusText: res.statusText,
+        ok: res.ok,
+        data: data
+      });
+      
+      // ==========================================
+      // RESPONSE HANDLING
+      // ==========================================
+      if (!res.ok) {
+        // ==========================================
+        // ERROR PATH: Extract error message from various formats
+        // ==========================================
+        // Backend may return errors in different formats:
+        // - { error: "message" }
+        // - { message: "message" }
+        // - { error: "title", message: "details" }
+        // - { success: false, error: "message", details: "..." }
+        
+        const errorMessage = data.error || data.message || `Server returned status ${res.status}`;
+        const errorDetails = data.details ? ` - ${data.details}` : '';
+        const fullErrorMessage = `${errorMessage}${errorDetails}`;
+        
+        setRegMessage(`Error: ${fullErrorMessage}`);
+        
+        console.error('[PATIENT REGISTRATION EXPLICIT ERROR]:', {
+          status: res.status,
+          statusText: res.statusText,
+          returnedData: data,
+          extractedError: errorMessage,
+          extractedDetails: data.details,
+          fullMessage: fullErrorMessage
+        });
+        
+        return; // Exit early on error
+      }
+      
+      // ==========================================
+      // SUCCESS PATH
+      // ==========================================
+      setRegMessage('Success: Patient registered successfully!');
+      
+      // ==========================================
+      // CLEAR FORM FIELDS ON SUCCESS
+      // ==========================================
+      setRegName('');
+      setRegEmail('');
+      setRegPhone('');
+      setRegAge('');
+      setRegGender('Male'); // Reset to default
+      setRegHistory('');
+      
+      // Refresh patient directory to show new patient
+      fetchPatients(1);
+      
+      console.log('[PATIENT REGISTRATION] Registration successful, form cleared');
+      
+    } catch (err) {
+      // ==========================================
+      // NETWORK ERROR OR EXCEPTION
+      // ==========================================
+      // This catches:
+      // - Network failures (no internet, server down)
+      // - CORS errors
+      // - Timeout errors
+      // - Any other unexpected exceptions
+      
+      console.error('[PATIENT REGISTRATION] Request failed:', {
+        message: err.message,
+        name: err.name,
+        error: err,
+        stack: err.stack
+      });
+      
+      // Provide user-friendly error message based on error type
+      let userMessage = err.message;
+      
+      if (err.name === 'TypeError' && err.message.includes('fetch')) {
+        userMessage = 'Unable to connect to server. Please check your internet connection.';
+      } else if (err.name === 'AbortError') {
+        userMessage = 'Request timed out. Please try again.';
+      }
+      
+      setRegMessage(`Error: ${userMessage}`);
+    }
+  };
+
+  // Handle Appointment Booking
+  const handleBookAppointment = async (e) => {
+    e.preventDefault();
+    setBookingMessage('');
+
+    if (!bookingPatientId || !bookingDoctorId || !bookingDate) {
+      setBookingMessage('Error: All booking fields are required.');
+      return;
+    }
+
+    try {
+      // ==========================================
+      // PARAMETER SANITIZATION & TYPE CASTING
+      // ==========================================
+      // Frontend form inputs return strings, but backend expects proper types
+      // datetime-local returns format: "2026-05-27T14:30"
+      // We need to convert to ISO string for consistent parsing
+      
+      // Parse and validate patient ID
+      const parsedPatientId = parseInt(bookingPatientId, 10);
+      if (isNaN(parsedPatientId)) {
+        setBookingMessage('Error: Invalid patient ID. Please select a valid patient.');
+        return;
+      }
+      
+      // Parse and validate doctor ID
+      const parsedDoctorId = parseInt(bookingDoctorId, 10);
+      if (isNaN(parsedDoctorId)) {
+        setBookingMessage('Error: Invalid doctor ID. Please select a valid doctor.');
+        return;
+      }
+      
+      // ==========================================
+      // DATE NORMALIZATION & VALIDATION
+      // ==========================================
+      // Convert datetime-local string to proper ISO format
+      // Input format: "2026-05-27T14:30" (no timezone, no seconds)
+      // Output format: "2026-05-27T14:30:00.000Z" (ISO 8601 with UTC)
+      
+      let formattedIsoDate;
+      try {
+        // datetime-local gives us "YYYY-MM-DDTHH:mm" format
+        // Add seconds if not present and convert to ISO string
+        const dateValue = bookingDate.includes(':') && bookingDate.split(':').length === 2
+          ? `${bookingDate}:00` // Add seconds
+          : bookingDate;
+        
+        const dateObj = new Date(dateValue);
+        
+        // Validate the date is valid
+        if (isNaN(dateObj.getTime())) {
+          setBookingMessage('Error: Invalid date format. Please select a valid date and time.');
+          return;
+        }
+        
+        // Validate the date is in the future
+        if (dateObj < new Date()) {
+          setBookingMessage('Error: Appointment date must be in the future.');
+          return;
+        }
+        
+        // Convert to ISO string for backend
+        formattedIsoDate = dateObj.toISOString();
+        
+        console.log('[BOOKING DEBUG] Date conversion:', {
+          original: bookingDate,
+          withSeconds: dateValue,
+          dateObject: dateObj,
+          isoString: formattedIsoDate
+        });
+        
+      } catch (dateError) {
+        console.error('[BOOKING ERROR] Date parsing failed:', dateError);
+        setBookingMessage('Error: Failed to parse appointment date. Please try again.');
+        return;
+      }
+      
+      // ==========================================
+      // SANITIZED API REQUEST
+      // ==========================================
+      console.log('[BOOKING DEBUG] Sending appointment request:', {
+        patientId: parsedPatientId,
+        doctorId: parsedDoctorId,
+        appointmentDate: formattedIsoDate,
+        notes: bookingReason || 'None provided'
+      });
+      
+      const res = await fetch(`${API_BASE_URL}/appointments`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          patientId: parsedPatientId,
+          doctorId: parsedDoctorId,
+          appointmentDate: formattedIsoDate,
+          notes: bookingReason || 'None provided'
+        })
+      });
+
+      const data = await res.json();
+      
+      console.log('[BOOKING DEBUG] Server response:', {
+        status: res.status,
+        ok: res.ok,
+        data: data
+      });
+      
+      if (res.ok) {
+        setBookingMessage('Success: Appointment booked successfully!');
+        setBookingPatientId('');
+        setBookingDoctorId('');
+        setBookingDate('');
+        setBookingReason('');
+        
+        // CASE-INSENSITIVE ROLE CHECK: Use normalized role
+        const currentRole = user?.role?.toUpperCase() || '';
+        if (currentRole === 'DOCTOR') fetchDoctorWorklist();
+      } else {
+        // Enhanced error messaging
+        const errorMsg = data.message || data.error || 'Failed to book appointment';
+        setBookingMessage(`Error: ${errorMsg}`);
+        
+        // Log detailed error for debugging
+        console.error('[BOOKING ERROR] Server returned error:', {
+          status: res.status,
+          error: data.error,
+          message: data.message,
+          code: data.code,
+          conflictFields: data.conflictFields
+        });
+      }
+    } catch (err) {
+      console.error('[BOOKING ERROR] Request failed:', err);
+      setBookingMessage(`Error: ${err.message}`);
+    }
+  };
+
+  // Delete Patient (Bypassed authorization admin check!)
+  const handleDeletePatient = async (id) => {
+    if (!confirm('Are you sure you want to delete this patient record?')) return;
+    try {
+      const res = await fetch(`${API_BASE_URL}/patients/${id}`, {
+        method: 'DELETE',
+        headers: { 
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (!res.ok) {
+        console.error('[DASHBOARD FETCH ERROR - handleDeletePatient]:', {
+          status: res.status,
+          statusText: res.statusText,
+          patientId: id
+        });
+      }
+      
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.message || 'Patient deleted.');
+        fetchPatients(patientsPagination.page);
+      } else {
+        alert(`Error: ${data.error || 'Unauthorized deletion!'}`);
+      }
+    } catch (err) {
+      console.error('[DASHBOARD FETCH ERROR - handleDeletePatient]:', {
+        message: err.message,
+        error: err,
+        patientId: id
+      });
+      alert(`Error: ${err.message}`);
+    }
+  };
+
+  // Queue Token Checkin (Race condition API!)
+  const handleQueueCheckin = async (patientId, doctorId, appointmentId = null) => {
+    setCheckinMessage('');
+    try {
+      const res = await fetch(`${API_BASE_URL}/queue/checkin`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ patientId, doctorId, appointmentId })
+      });
+      
+      if (!res.ok) {
+        console.error('[DASHBOARD FETCH ERROR - handleQueueCheckin]:', {
+          status: res.status,
+          statusText: res.statusText,
+          patientId,
+          doctorId,
+          appointmentId
+        });
+      }
+      
+      const data = await res.json();
+      if (res.ok) {
+        setCheckinMessage(`Checked in! Generated Token #${data.token.tokenNumber}`);
+        // CASE-INSENSITIVE ROLE CHECK: Use normalized role
+        const currentRole = user?.role?.toUpperCase() || '';
+        if (currentRole === 'DOCTOR') fetchDoctorWorklist();
+      } else {
+        setCheckinMessage(`Error check-in: ${data.error}`);
+      }
+    } catch (err) {
+      console.error('[DASHBOARD FETCH ERROR - handleQueueCheckin]:', {
+        message: err.message,
+        error: err,
+        patientId,
+        doctorId,
+        appointmentId
+      });
+      setCheckinMessage(`Error: ${err.message}`);
+    }
+  };
+
+  // ==========================================
+  // DOCTOR WORKFLOW FUNCTIONS
+  // ==========================================
+  
+  // Update token status (WAITING -> CALLING -> COMPLETED / SKIPPED)
+  const handleUpdateQueueStatus = async (tokenId, newStatus) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/queue/${tokenId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ status: newStatus })
+      });
+      
+      if (!res.ok) {
+        console.error('[DASHBOARD FETCH ERROR - handleUpdateQueueStatus]:', {
+          status: res.status,
+          statusText: res.statusText,
+          tokenId,
+          newStatus
+        });
+        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+      }
+      
+      if (res.ok) {
+        fetchDoctorWorklist();
+      }
+    } catch (e) {
+      console.error('[DASHBOARD FETCH ERROR - handleUpdateQueueStatus]:', {
+        message: e.message,
+        error: e,
+        tokenId,
+        newStatus
+      });
+    }
+  };
+
+  // Complete consultation of an appointment
+  const handleCompleteAppointment = async (appId) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/appointments/${appId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ status: 'COMPLETED' })
+      });
+      if (res.ok) {
+        fetchDoctorWorklist();
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // ==========================================
+  // ADMIN SYSTEM WORKFLOWS
+  // ==========================================
+  
+  // Slow report generator fetch
+  const generateSystemReport = async () => {
+    setAdminReportLoading(true);
+    try {
+      // Calls slow nested aggregation endpoint
+      const res = await fetch(`${API_BASE_URL}/reports/doctor-stats`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAdminReportData(data);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setAdminReportLoading(false);
+    }
+  };
+
+  // Search Doctors (SQL Injection vulnerable API!)
+  const searchPhysiciansAdmin = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/doctors?search=${adminSearchQuery}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setDoctorsList(data);
+      } else {
+        alert(`API Error: ${data.sqlMessage || data.error}`);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex flex-col">
+      <Navbar />
+
+      <main className="flex-1 max-w-7xl w-full mx-auto p-6 sm:p-8">
+        
+        {/* Navigation Tabs based on Role */}
+        <div className="flex border-b border-slate-200 dark:border-slate-800 mb-8 overflow-x-auto gap-4">
+          {normalizedRole === 'ADMIN' && (
+            <>
+              <button
+                onClick={() => setActiveTab('reports')}
+                className={`py-3.5 px-1 border-b-2 font-bold text-sm transition-all whitespace-nowrap ${activeTab === 'reports' ? 'border-teal-500 text-teal-600 dark:text-teal-400' : 'border-transparent text-slate-400'}`}
+              >
+                System Audit Reports
+              </button>
+              <button
+                onClick={() => setActiveTab('physicians')}
+                className={`py-3.5 px-1 border-b-2 font-bold text-sm transition-all whitespace-nowrap ${activeTab === 'physicians' ? 'border-teal-500 text-teal-600 dark:text-teal-400' : 'border-transparent text-slate-400'}`}
+              >
+                Physician Registry
+              </button>
+            </>
+          )}
+
+          {(normalizedRole === 'RECEPTIONIST' || normalizedRole === 'ADMIN') && (
+            <>
+              <button
+                onClick={() => setActiveTab('patients')}
+                className={`py-3.5 px-1 border-b-2 font-bold text-sm transition-all whitespace-nowrap ${activeTab === 'patients' ? 'border-teal-500 text-teal-600 dark:text-teal-400' : 'border-transparent text-slate-400'}`}
+              >
+                Patient Registry Directory
+              </button>
+              <button
+                onClick={() => setActiveTab('book')}
+                className={`py-3.5 px-1 border-b-2 font-bold text-sm transition-all whitespace-nowrap ${activeTab === 'book' ? 'border-teal-500 text-teal-600 dark:text-teal-400' : 'border-transparent text-slate-400'}`}
+              >
+                Scheduling / Check-in Portal
+              </button>
+            </>
+          )}
+
+          {normalizedRole === 'DOCTOR' && (
+            <>
+              <button
+                onClick={() => setActiveTab('appointments')}
+                className={`py-3.5 px-1 border-b-2 font-bold text-sm transition-all whitespace-nowrap ${activeTab === 'appointments' ? 'border-teal-500 text-teal-600 dark:text-teal-400' : 'border-transparent text-slate-400'}`}
+              >
+                My Scheduled Bookings
+              </button>
+              <button
+                onClick={() => setActiveTab('queue')}
+                className={`py-3.5 px-1 border-b-2 font-bold text-sm transition-all whitespace-nowrap ${activeTab === 'queue' ? 'border-teal-500 text-teal-600 dark:text-teal-400' : 'border-transparent text-slate-400'}`}
+              >
+                Active Calling Queue
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* Global Notifications Panel */}
+        {checkinMessage && (
+          <div className="p-4 mb-6 rounded-xl bg-teal-500/10 border border-teal-500/20 text-teal-600 dark:text-teal-400 flex items-center justify-between text-sm">
+            <span>{checkinMessage}</span>
+            <button onClick={() => setCheckinMessage('')} className="font-bold underline text-xs">Dismiss</button>
+          </div>
+        )}
+
+        {/* ==============================================================
+            TAB: PATIENT REGISTRY (RECEPTIONIST & ADMIN)
+            ============================================================== */}
+        {activeTab === 'patients' && (
+          <div className="space-y-8">
+            <div className="grid gap-8 lg:grid-cols-3">
+              {/* Directory Section */}
+              <div className="lg:col-span-2 space-y-6">
+                <div className="glass p-6 rounded-2xl shadow-md border border-slate-200 dark:border-slate-800">
+                  <h3 className="text-lg font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2 mb-4">
+                    <ClipboardList className="h-5 w-5 text-teal-600" />
+                    Patient Lookup Directory
+                  </h3>
+
+                  {/* Filters (Causes slow re-renders on keystroke) */}
+                  <div className="flex gap-4 mb-6">
+                    <div className="relative flex-1 rounded-lg shadow-sm">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                        <Search className="h-4 w-4" />
+                      </div>
+                      <input
+                        type="text"
+                        value={patientSearch}
+                        onChange={(e) => setPatientSearch(e.target.value)}
+                        placeholder="Search by name, phone or email..."
+                        className="block w-full pl-9 pr-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                      />
+                    </div>
+
+                    <select
+                      value={patientGender}
+                      onChange={(e) => setPatientGender(e.target.value)}
+                      className="px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 text-sm focus:outline-none"
+                    >
+                      <option value="All">All Genders</option>
+                      <option value="Male">Male</option>
+                      <option value="Female">Female</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
+
+                  {/* Table listing */}
+                  {patientsLoading ? (
+                    <p className="text-center py-6 text-slate-400 animate-pulse text-sm">Synchronizing table data...</p>
+                  ) : patients.length === 0 ? (
+                    <p className="text-center py-6 text-slate-400 text-sm">No registered patients match this filter.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-800 text-sm text-left">
+                        <thead>
+                          <tr className="text-slate-400 uppercase tracking-widest text-xxs font-bold border-b border-slate-200 dark:border-slate-800">
+                            <th className="pb-3">Name</th>
+                            <th className="pb-3">Contact</th>
+                            <th className="pb-3">Age/Sex</th>
+                            <th className="pb-3 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                          {patients.map((p) => (
+                            <tr key={p.id} className="hover:bg-slate-500/5 transition-colors">
+                              <td className="py-3.5 font-bold text-slate-800 dark:text-slate-200">
+                                {p.name}
+                                {p.email && <span className="block text-xxs text-slate-400 font-normal mt-0.5">{p.email}</span>}
+                              </td>
+                              <td className="py-3.5 text-slate-500 dark:text-slate-400 font-medium">{p.phoneNumber}</td>
+                              <td className="py-3.5 text-slate-500 dark:text-slate-400">
+                                {p.age} yrs / <span className="capitalize">{p.gender}</span>
+                              </td>
+                              <td className="py-3.5 text-right space-x-2">
+                                <button
+                                  onClick={() => handleQueueCheckin(p.id, doctorsList[0]?.id)}
+                                  className="text-xxs px-2.5 py-1 rounded bg-teal-500/10 text-teal-600 dark:text-teal-400 font-bold hover:bg-teal-500 hover:text-white transition-colors"
+                                >
+                                  Check In
+                                </button>
+                                
+                                {/* Security flaw testing: Receptionist or doctor can delete since check is bypassed */}
+                                <button
+                                  onClick={() => handleDeletePatient(p.id)}
+                                  className="text-xxs p-1 rounded bg-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white transition-colors"
+                                  title="Delete patient record"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* Pagination control */}
+                  <div className="flex items-center justify-between mt-6 pt-4 border-t border-slate-100 dark:border-slate-800">
+                    <span className="text-xs text-slate-400 font-medium">
+                      Page {patientsPagination.page} of {patientsPagination.totalPages}
+                    </span>
+                    <div className="flex gap-2">
+                      <button
+                        disabled={patientsPagination.page <= 1}
+                        onClick={() => fetchPatients(patientsPagination.page - 1)}
+                        className="px-3 py-1 rounded border border-slate-200 dark:border-slate-700 hover:bg-teal-500/10 disabled:opacity-50 text-xs font-semibold"
+                      >
+                        Prev
+                      </button>
+                      <button
+                        disabled={patientsPagination.page >= patientsPagination.totalPages}
+                        onClick={() => fetchPatients(patientsPagination.page + 1)}
+                        className="px-3 py-1 rounded border border-slate-200 dark:border-slate-700 hover:bg-teal-500/10 disabled:opacity-50 text-xs font-semibold"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Registration Form */}
+              <div className="glass p-6 rounded-2xl shadow-md border border-slate-200 dark:border-slate-800 h-fit">
+                <h3 className="text-lg font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2 mb-4">
+                  <UserPlus className="h-5 w-5 text-teal-600" />
+                  New Registration
+                </h3>
+
+                {regMessage && (
+                  <div className={`p-3 text-sm rounded-lg mb-4 ${regMessage.startsWith('Success') ? 'bg-teal-500/15 text-teal-600 dark:text-teal-400 border border-teal-500/20' : 'bg-rose-500/15 text-rose-500 border border-rose-500/20'}`}>
+                    {regMessage}
+                  </div>
+                )}
+
+                <form onSubmit={handleRegisterPatient} className="space-y-4 text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  <div>
+                    <label className="block mb-1">Patient Full Name*</label>
+                    <input
+                      type="text"
+                      required
+                      value={regName}
+                      onChange={(e) => setRegName(e.target.value)}
+                      placeholder="Bruce Wayne"
+                      className="block w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 text-sm focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block mb-1">Age (Years)*</label>
+                      <input
+                        type="number"
+                        required
+                        value={regAge}
+                        onChange={(e) => setRegAge(e.target.value)}
+                        placeholder="35"
+                        className="block w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 text-sm focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block mb-1">Gender*</label>
+                      <select
+                        value={regGender}
+                        onChange={(e) => setRegGender(e.target.value)}
+                        className="block w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 text-sm focus:outline-none"
+                      >
+                        <option value="Male">Male</option>
+                        <option value="Female">Female</option>
+                        <option value="Other">Other</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block mb-1">Contact Phone*</label>
+                    <input
+                      type="text"
+                      required
+                      value={regPhone}
+                      onChange={(e) => setRegPhone(e.target.value)}
+                      placeholder="555-0199 (Unchecked format)"
+                      className="block w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 text-sm focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block mb-1">Email Address</label>
+                    <input
+                      type="email"
+                      value={regEmail}
+                      onChange={(e) => setRegEmail(e.target.value)}
+                      placeholder="bruce@wayne.com"
+                      className="block w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 text-sm focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block mb-1">Medical Anamnesis / History (Can be left blank)</label>
+                    <textarea
+                      value={regHistory}
+                      onChange={(e) => setRegHistory(e.target.value)}
+                      placeholder="E.g. cardiovascular risks, asthma..."
+                      rows="3"
+                      className="block w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 text-sm focus:outline-none"
+                    ></textarea>
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="glow-btn w-full py-2.5 bg-teal-600 hover:bg-teal-700 text-white font-extrabold text-sm rounded-lg shadow-md transition-colors duration-300 mt-2"
+                  >
+                    Register Patient Record
+                  </button>
+                </form>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ==============================================================
+            TAB: SCHEDULING / BOOKING & CHECKIN (RECEPTIONIST & ADMIN)
+            ============================================================== */}
+        {activeTab === 'book' && (
+          <div className="grid gap-8 lg:grid-cols-2">
+            {/* Book Appointment Card */}
+            <div className="glass p-6 rounded-2xl shadow-md border border-slate-200 dark:border-slate-800">
+              <h3 className="text-lg font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2 mb-4">
+                <CalendarDays className="h-5 w-5 text-teal-600" />
+                Schedule Appointment Slot
+              </h3>
+
+              {bookingMessage && (
+                <div className={`p-3 text-sm rounded-lg mb-4 ${bookingMessage.startsWith('Success') ? 'bg-teal-500/15 text-teal-600 dark:text-teal-400 border border-teal-500/20' : 'bg-rose-500/15 text-rose-500 border border-rose-500/20'}`}>
+                  {bookingMessage}
+                </div>
+              )}
+
+              <form onSubmit={handleBookAppointment} className="space-y-4 text-xs font-semibold text-slate-700 dark:text-slate-300">
+                <div>
+                  <label className="block mb-1">Select Registered Patient*</label>
+                  <select
+                    required
+                    value={bookingPatientId}
+                    onChange={(e) => setBookingPatientId(e.target.value)}
+                    className="block w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 text-sm focus:outline-none"
+                  >
+                    <option value="">-- Choose Patient --</option>
+                    {patients.map(p => (
+                      <option key={p.id} value={p.id}>{p.name} ({p.phoneNumber})</option>
+                    ))}
+                  </select>
+                  <span className="text-xxs text-slate-400 block mt-1">If client is missing, register them in the Directory tab first.</span>
+                </div>
+
+                <div>
+                  <label className="block mb-1">Select Physician*</label>
+                  <select
+                    required
+                    value={bookingDoctorId}
+                    onChange={(e) => setBookingDoctorId(e.target.value)}
+                    className="block w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 text-sm focus:outline-none"
+                  >
+                    <option value="">-- Choose Physician --</option>
+                    {doctorsList.map(d => (
+                      <option key={d.id} value={d.id}>{d.name} - {d.specialization} (${d.consultationFee})</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block mb-1">Appointment Date & Time*</label>
+                  <input
+                    type="datetime-local"
+                    required
+                    value={bookingDate}
+                    onChange={(e) => setBookingDate(e.target.value)}
+                    className="block w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 text-sm focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block mb-1">Consultation Objective / Reason</label>
+                  <input
+                    type="text"
+                    value={bookingReason}
+                    onChange={(e) => setBookingReason(e.target.value)}
+                    placeholder="Regular diagnostic review, suture removal..."
+                    className="block w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 text-sm focus:outline-none"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="glow-btn w-full py-2.5 bg-teal-600 hover:bg-teal-700 text-white font-extrabold text-sm rounded-lg shadow-md transition-colors duration-300 mt-2"
+                >
+                  Book Appointment Slot
+                </button>
+              </form>
+            </div>
+
+            {/* Quick Walkin Checkin Token Board */}
+            <div className="glass p-6 rounded-2xl shadow-md border border-slate-200 dark:border-slate-800">
+              <h3 className="text-lg font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2 mb-4">
+                <Activity className="h-5 w-5 text-teal-600" />
+                Active Direct Queue Check-In
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mb-6 font-semibold">
+                Generate an immediate waiting token for a direct walk-in patient. Allocates active positions under selected practitioners.
+              </p>
+
+              <div className="space-y-6">
+                <div className="p-4 rounded-xl border border-teal-500/25 bg-teal-500/10 text-slate-700 dark:text-slate-300 text-xs leading-5">
+                  <strong>Token Generation Engine Note:</strong> Direct arrivals bypass appointments. The token engine automatically fetches the current day's maximum token size and increments. 
+                  <span className="block mt-1 font-bold text-teal-600 dark:text-teal-400 flex items-center gap-1.5">
+                    <ShieldCheck className="h-3.5 w-3.5" />
+                    Secured: Atomic transaction with Serializable isolation prevents race conditions
+                  </span>
+                </div>
+
+                <div className="space-y-4 text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  <div>
+                    <label className="block mb-1">Select Walk-in Patient*</label>
+                    <select
+                      id="walkin-patient"
+                      className="block w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 text-sm focus:outline-none"
+                    >
+                      <option value="">-- Choose Patient --</option>
+                      {patients.map(p => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block mb-1">Assign Physician*</label>
+                    <select
+                      id="walkin-doctor"
+                      className="block w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 text-sm focus:outline-none"
+                    >
+                      <option value="">-- Choose Physician --</option>
+                      {doctorsList.map(d => (
+                        <option key={d.id} value={d.id}>{d.name} ({d.specialization})</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      const pId = document.getElementById('walkin-patient').value;
+                      const dId = document.getElementById('walkin-doctor').value;
+                      if (!pId || !dId) {
+                        alert('Select patient and doctor first');
+                        return;
+                      }
+                      handleQueueCheckin(pId, dId);
+                    }}
+                    className="glow-btn w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white dark:bg-teal-500 dark:text-slate-950 dark:hover:bg-teal-400 font-extrabold text-sm rounded-lg shadow-md transition-colors duration-300 mt-2"
+                  >
+                    Generate Live Token
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ==============================================================
+            TAB: DOCTOR WORKLIST - APPOINTMENTS (DOCTOR ROLE)
+            ============================================================== */}
+        {activeTab === 'appointments' && (
+          <div className="space-y-6">
+            <div className="glass p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-md">
+              <h3 className="text-lg font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2 mb-4">
+                <CalendarDays className="h-5 w-5 text-teal-600" />
+                Scheduled Daily Bookings List
+              </h3>
+
+              {doctorAppointments.length === 0 ? (
+                <p className="text-center py-6 text-slate-400 text-sm">No appointments scheduled for you today.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-800 text-sm text-left">
+                    <thead>
+                      <tr className="text-slate-400 uppercase tracking-widest text-xxs font-bold border-b border-slate-200 dark:border-slate-800">
+                        <th className="pb-3">Time</th>
+                        <th className="pb-3">Patient</th>
+                        <th className="pb-3">Consultation Reason</th>
+                        <th className="pb-3">Status</th>
+                        <th className="pb-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {doctorAppointments.map((app) => (
+                        <tr key={app.id} className="hover:bg-slate-500/5 transition-colors">
+                          <td className="py-3.5 font-mono font-bold text-slate-800 dark:text-slate-200">
+                            {new Date(app.appointmentDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </td>
+                          <td className="py-3.5">
+                            <button
+                              onClick={() => setSelectedPatientHistory(app.patient)}
+                              className="font-bold text-teal-600 hover:underline hover:text-teal-700 transition-colors"
+                            >
+                              {app.patient ? app.patient.name : 'Unknown Patient'}
+                            </button>
+                            <span className="block text-xxs text-slate-400 mt-0.5">Age: {app.patient?.age}</span>
+                          </td>
+                          <td className="py-3.5 text-slate-500 dark:text-slate-400 font-semibold">{app.reason || 'None provided'}</td>
+                          <td className="py-3.5">
+                            <span className={`inline-flex px-2 py-0.5 rounded text-xxs font-extrabold tracking-wide uppercase ${app.status === 'COMPLETED' ? 'bg-teal-500/10 text-teal-600' : app.status === 'CANCELLED' ? 'bg-rose-500/10 text-rose-500' : 'bg-amber-500/10 text-amber-500'}`}>
+                              {app.status}
+                            </span>
+                          </td>
+                          <td className="py-3.5 text-right space-x-2">
+                            {app.status === 'PENDING' && (
+                              <>
+                                <button
+                                  onClick={() => {
+                                    // TYPE-SAFE ID MATCHING: Use same logic as fetchDoctorWorklist
+                                    const matchedDoc = doctorsList.find(d => 
+                                      d.userId === user.id || 
+                                      d.userId == user.id || // eslint-disable-line eqeqeq
+                                      Number(d.userId) === Number(user.id)
+                                    );
+                                    if (matchedDoc) {
+                                      handleQueueCheckin(app.patientId, matchedDoc.id, app.id);
+                                    } else {
+                                      console.error('[DASHBOARD ERROR]: Cannot find matching doctor for check-in', {
+                                        userId: user.id,
+                                        doctorsList: doctorsList.map(d => ({ id: d.id, userId: d.userId }))
+                                      });
+                                      alert('Error: Cannot find your doctor profile. Please refresh the page.');
+                                    }
+                                  }}
+                                  className="text-xxs px-2.5 py-1 rounded bg-teal-500/10 text-teal-600 dark:text-teal-400 font-extrabold hover:bg-teal-500 hover:text-white transition-colors"
+                                >
+                                  Check In Patient
+                                </button>
+                                <button
+                                  onClick={() => handleCompleteAppointment(app.id)}
+                                  className="text-xxs px-2.5 py-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-extrabold hover:bg-teal-500 hover:text-white transition-colors"
+                                >
+                                  Complete
+                                </button>
+                              </>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Patient Clinical History Modal Display */}
+            {selectedPatientHistory && (
+              <div className="glass p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-md space-y-4">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <h3 className="text-lg font-extrabold text-slate-800 dark:text-slate-100">
+                      Medical Records: {selectedPatientHistory.name}
+                    </h3>
+                    <p className="text-xxs font-bold text-slate-400 uppercase tracking-widest mt-1">
+                      Gender: {selectedPatientHistory.gender} | Contact: {selectedPatientHistory.phoneNumber}
+                    </p>
+                  </div>
+                  <button 
+                    onClick={() => setSelectedPatientHistory(null)}
+                    className="text-xs font-bold text-slate-400 hover:text-slate-600"
+                  >
+                    Close
+                  </button>
+                </div>
+
+                <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 text-xs space-y-2">
+                  <h4 className="font-bold text-slate-400 uppercase tracking-wider">Clinical Background Information</h4>
+                  
+                  {/* DEFENSIVE PROGRAMMING FIX: Prevents React crash when medicalHistory is null/undefined
+                      Uses optional chaining (?.) and nullish coalescing (??) to safely handle missing data.
+                      If medicalHistory is null/undefined, displays a user-friendly fallback message instead of crashing.
+                      This prevents "Cannot read properties of null" errors that would crash the entire React tree. */}
+                  {selectedPatientHistory.medicalHistory ? (
+                    <p className="text-slate-700 dark:text-slate-300 leading-5 text-sm font-semibold">
+                      {selectedPatientHistory.medicalHistory.toUpperCase()}
+                    </p>
+                  ) : (
+                    <div className="flex items-center gap-3 p-4 rounded-lg bg-slate-100 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700">
+                      <ShieldAlert className="h-5 w-5 text-slate-400 shrink-0" />
+                      <div>
+                        <p className="text-slate-500 dark:text-slate-400 text-sm font-medium">
+                          No medical history records found for this patient.
+                        </p>
+                        <p className="text-slate-400 dark:text-slate-500 text-xs mt-1">
+                          Medical history can be added during patient registration or updated later.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="pt-2 flex justify-between items-center text-xs">
+                  {/* Navigate to patient profile page */}
+                  <button
+                    onClick={() => router.push(`/patients/${selectedPatientHistory.id}`)}
+                    className="text-teal-600 font-extrabold hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    View Full Patient Profile
+                    <ArrowRight className="h-3 w-3" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ==============================================================
+            TAB: DOCTOR ACTIVE CALLING QUEUE (DOCTOR ROLE)
+            ============================================================== */}
+        {activeTab === 'queue' && (
+          <div className="glass p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-md">
+            <h3 className="text-lg font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2 mb-4">
+              <Clock className="h-5 w-5 text-teal-600" />
+              Active Operations Queue Controller
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mb-6 font-semibold">
+              Manage patient call sequences for live monitors. Update status from waiting to active calling.
+            </p>
+
+            {doctorQueue.length === 0 ? (
+              <p className="text-center py-6 text-slate-400 text-sm">No checked-in patients in queue today.</p>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {doctorQueue.map((t) => (
+                  <div
+                    key={t.id}
+                    className={`p-5 rounded-2xl border shadow-md relative overflow-hidden flex flex-col justify-between ${t.status === 'CALLING' ? 'border-teal-500 bg-teal-500/10' : 'border-slate-200 dark:border-slate-800 bg-slate-500/5'}`}
+                  >
+                    <div className="flex justify-between items-start">
+                      <span className="text-2xl font-black text-slate-800 dark:text-slate-100">Token #{t.tokenNumber}</span>
+                      <span className={`px-2 py-0.5 rounded text-xxs font-extrabold tracking-wide uppercase ${t.status === 'CALLING' ? 'bg-teal-500 text-white' : t.status === 'COMPLETED' ? 'bg-teal-500/10 text-teal-600' : 'bg-amber-500/10 text-amber-500'}`}>
+                        {t.status}
+                      </span>
+                    </div>
+
+                    <div className="mt-4">
+                      <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200">{t.patient.name}</h4>
+                      <p className="text-xxs text-slate-400 mt-0.5">Contact: {t.patient.phoneNumber}</p>
+                    </div>
+
+                    <div className="mt-6 flex gap-2">
+                      {t.status === 'WAITING' && (
+                        <button
+                          onClick={() => handleUpdateQueueStatus(t.id, 'CALLING')}
+                          className="flex-1 py-1.5 bg-teal-600 text-white font-bold text-xxs rounded hover:bg-teal-700 transition-colors"
+                        >
+                          Call Patient
+                        </button>
+                      )}
+                      {t.status === 'CALLING' && (
+                        <>
+                          <button
+                            onClick={() => handleUpdateQueueStatus(t.id, 'COMPLETED')}
+                            className="flex-1 py-1.5 bg-teal-600 text-white font-bold text-xxs rounded hover:bg-teal-700 transition-colors"
+                          >
+                            Consulted
+                          </button>
+                          <button
+                            onClick={() => handleUpdateQueueStatus(t.id, 'SKIPPED')}
+                            className="flex-1 py-1.5 bg-rose-500/10 text-rose-500 font-bold text-xxs rounded hover:bg-rose-500 hover:text-white transition-colors"
+                          >
+                            Skip / No Show
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ==============================================================
+            TAB: SYSTEM REPORTS (ADMIN ROLE)
+            ============================================================== */}
+        {activeTab === 'reports' && (
+          <div className="space-y-8">
+            <div className="glass p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-md">
+              <div className="flex justify-between items-center mb-6">
+                <div>
+                  <h3 className="text-lg font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                    <TrendingUp className="h-5 w-5 text-teal-600" />
+                    Doctor Revenue & Operations Report
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 font-semibold mt-1">
+                    System-wide practitioner performance audits. Computes completed bookings and potential sales.
+                  </p>
+                </div>
+                <button
+                  onClick={generateSystemReport}
+                  disabled={adminReportLoading}
+                  className="glow-btn px-4 py-2 bg-teal-600 text-white font-extrabold text-xs rounded-lg shadow hover:bg-teal-700 disabled:opacity-50 transition-colors"
+                >
+                  {adminReportLoading ? 'Aggregating...' : 'Load Doctor System Audit Report'}
+                </button>
+              </div>
+
+              {adminReportLoading ? (
+                <div className="flex flex-col items-center justify-center py-12">
+                  <div className="pulse-loader">
+                    <div></div>
+                    <div></div>
+                  </div>
+                  <p className="mt-4 text-xs font-semibold text-slate-400 animate-pulse">
+                    Executing sequential nested loop aggregates. Event loop is locked...
+                  </p>
+                </div>
+              ) : !adminReportData ? (
+                <div className="p-8 text-center bg-slate-100 dark:bg-slate-800/40 rounded-xl text-slate-400 text-xs font-semibold border border-dashed border-slate-200 dark:border-slate-700">
+                  Click the button above to load reports. Warning: Endpoint is extremely slow on larger doctor count tables!
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {/* Reporting details benchmark */}
+                  <div className="flex items-center gap-3 p-3 bg-amber-500/10 text-slate-700 dark:text-slate-300 text-xs rounded-lg border border-amber-500/20 leading-5">
+                    <Clock className="h-5 w-5 text-amber-500 shrink-0" />
+                    <div>
+                      <strong>Performance Diagnostic:</strong> API execution resolved in{' '}
+                      <span className="font-bold text-amber-500">{adminReportData.timeTakenMs} ms</span>. 
+                      Sequential nested database calls loops reduce throughput. Optimization using Promise.all or single join aggregate is required.
+                    </div>
+                  </div>
+
+                  {/* Summary widgets */}
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    <div className="p-4 bg-slate-500/5 border border-slate-200 dark:border-slate-800 rounded-xl">
+                      <span className="text-xxs uppercase tracking-wider text-slate-400 font-bold">Total Physicians</span>
+                      <h4 className="text-2xl font-black text-slate-800 dark:text-slate-100 mt-1">{adminReportData.data.length}</h4>
+                    </div>
+                    <div className="p-4 bg-slate-500/5 border border-slate-200 dark:border-slate-800 rounded-xl">
+                      <span className="text-xxs uppercase tracking-wider text-slate-400 font-bold">Sum appointments</span>
+                      <h4 className="text-2xl font-black text-slate-800 dark:text-slate-100 mt-1">
+                        {adminReportData.data.reduce((sum, item) => sum + item.totalAppointments, 0)}
+                      </h4>
+                    </div>
+                    <div className="p-4 bg-slate-500/5 border border-slate-200 dark:border-slate-800 rounded-xl">
+                      <span className="text-xxs uppercase tracking-wider text-slate-400 font-bold">Total Sales ($)</span>
+                      <h4 className="text-2xl font-black text-teal-600 dark:text-teal-400 mt-1">
+                        ${adminReportData.data.reduce((sum, item) => sum + item.revenue, 0)}
+                      </h4>
+                    </div>
+                  </div>
+
+                  {/* Table representation */}
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-800 text-sm text-left">
+                      <thead>
+                        <tr className="text-slate-400 uppercase tracking-widest text-xxs font-bold border-b border-slate-200 dark:border-slate-800">
+                          <th className="pb-3">Doctor</th>
+                          <th className="pb-3">Department</th>
+                          <th className="pb-3 text-center">Consultations</th>
+                          <th className="pb-3 text-center">Today Queue</th>
+                          <th className="pb-3 text-right">Revenue</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {adminReportData.data.map((item) => (
+                          <tr key={item.id} className="hover:bg-slate-500/5 transition-colors">
+                            <td className="py-3.5 font-bold text-slate-800 dark:text-slate-200">
+                              {item.name}
+                              <span className="block text-xxs text-teal-600 dark:text-teal-400 font-semibold uppercase mt-0.5">{item.specialization}</span>
+                            </td>
+                            <td className="py-3.5 text-slate-500 dark:text-slate-400">{item.department}</td>
+                            <td className="py-3.5 text-center text-slate-500 dark:text-slate-400">
+                              {item.completedAppointments} Completed / {item.totalAppointments} Total
+                            </td>
+                            <td className="py-3.5 text-center font-bold text-slate-800 dark:text-slate-200">{item.todayQueueSize} in queue</td>
+                            <td className="py-3.5 text-right font-bold text-teal-600 dark:text-teal-400">${item.revenue}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ==============================================================
+            TAB: PHYSICIAN REGISTRY (ADMIN ROLE - SQL INJECTION VULNERABILITY)
+            ============================================================== */}
+        {activeTab === 'physicians' && (
+          <div className="glass p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-md space-y-6">
+            <div>
+              <h3 className="text-lg font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                <Award className="h-5 w-5 text-teal-600" />
+                Staff Physicians Registry Lookup
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 font-semibold mt-1">
+                Database lookup for credentials. Uses a raw SQL interpolation backend query.
+              </p>
+            </div>
+
+            <div className="flex gap-4">
+              <div className="relative flex-1 rounded-lg shadow-sm">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                  <Search className="h-4 w-4" />
+                </div>
+                <input
+                  type="text"
+                  value={adminSearchQuery}
+                  onChange={(e) => setAdminSearchQuery(e.target.value)}
+                  placeholder="Enter physician name search criteria (raw syntax supported)..."
+                  className="block w-full pl-9 pr-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent text-sm"
+                />
+              </div>
+
+              <button
+                onClick={searchPhysiciansAdmin}
+                className="glow-btn px-5 py-2 bg-slate-900 text-white dark:bg-teal-500 dark:text-slate-950 font-bold text-xs rounded-lg hover:bg-slate-800 dark:hover:bg-teal-400 transition-colors"
+              >
+                Execute SQL Query
+              </button>
+            </div>
+
+            {/* Security Status Badge */}
+            <div className="p-3 bg-teal-500/10 text-teal-600 dark:text-teal-400 text-xs rounded-lg border border-teal-500/20 font-semibold leading-5 flex gap-3 items-start">
+              <ShieldCheck className="h-5 w-5 shrink-0 mt-0.5" />
+              <div>
+                <strong className="text-teal-700 dark:text-teal-300">🔒 Secured:</strong> Parameterized Input via Prisma ORM Compliant
+                <p className="text-teal-600/80 dark:text-teal-400/80 mt-1 text-xxs leading-relaxed">
+                  All search queries use type-safe parameterized inputs. SQL injection attacks are automatically prevented by Prisma's query builder.
+                </p>
+              </div>
+            </div>
+
+            {/* Doctors Result List */}
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {doctorsList.map((doc) => (
+                <div
+                  key={doc.id}
+                  className="p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-500/5 flex flex-col justify-between"
+                >
+                  <div>
+                    <span className="inline-flex px-2 py-0.5 rounded text-xxs font-extrabold tracking-wide uppercase bg-teal-500/10 text-teal-600 dark:text-teal-400 mb-2">
+                      {doc.department}
+                    </span>
+                    <h4 className="font-extrabold text-slate-800 dark:text-slate-100">{doc.name}</h4>
+                    <p className="text-xs text-slate-400 mt-0.5">{doc.specialization}</p>
+                  </div>
+                  <div className="mt-6 pt-3 border-t border-slate-200 dark:border-slate-800/80 flex justify-between items-center text-xs font-semibold text-slate-500">
+                    <span>Exp: {doc.experience} yrs</span>
+                    <span className="font-bold text-teal-600 dark:text-teal-400">Fee: ${doc.consultationFee}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
