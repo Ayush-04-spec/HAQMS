@@ -1,0 +1,53 @@
+# ==========================================
+# DOCKER IGNORE - FRONTEND
+# ==========================================
+
+# Dependencies (will be installed in container)
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Next.js build artifacts
+.next/
+out/
+build/
+dist/
+
+# Test files
+coverage/
+*.test.js
+*.test.jsx
+*.spec.js
+*.spec.jsx
+__tests__/
+
+# Logs
+logs/
+*.log
+
+# Documentation
+README.md
+*.md
+
+# Docker
+Dockerfile
+.dockerignore

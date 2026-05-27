@@ -1,0 +1,49 @@
+# ==========================================
+# DOCKER IGNORE - BACKEND
+# ==========================================
+
+# Dependencies (will be installed in container)
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build artifacts
+dist/
+build/
+
+# Test files
+coverage/
+*.test.js
+*.spec.js
+__tests__/
+
+# Logs
+logs/
+*.log
+
+# Documentation
+README.md
+*.md
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Prisma generated files (will be regenerated)
+prisma/migrations/.migration_lock

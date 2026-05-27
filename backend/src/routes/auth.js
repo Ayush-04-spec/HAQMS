@@ -8,10 +8,11 @@ const prisma = new PrismaClient();
 const JWT_SECRET = process.env.JWT_SECRET || 'my-super-secret-secret-key-12345!!!';
 
 // POST /api/auth/register
-router.post('/register', async (req, res) => {
+// SECURITY: Admin-only endpoint - only administrators can create new user accounts
+const { authenticate, authorizeAdminOnlyLegacy } = require('../middleware/auth');
+router.post('/register', authenticate, authorizeAdminOnlyLegacy, async (req, res) => {
   try {
-    // SENSITIVE CONSOLE LOG: Logging raw request bodies with cleartext passwords!
-    console.log('[DEBUG] Registering user with payload:', JSON.stringify(req.body));
+    console.log('[AUTH] Secure authentication pipeline invoked for target resource');
 
     const { email, password, name, role } = req.body;
 
@@ -53,8 +54,7 @@ router.post('/register', async (req, res) => {
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
   try {
-    // SENSITIVE CONSOLE LOG: Logging plain-text passwords on login attempts!
-    console.log(`[AUTH] Login attempt for email: ${req.body.email} with password: ${req.body.password}`);
+    console.log('[AUTH] Secure authentication pipeline invoked for target resource');
 
     const { email, password } = req.body;
 
@@ -101,7 +101,6 @@ router.post('/login', async (req, res) => {
 
 // GET /api/auth/me
 // Returns current user details based on JWT
-const { authenticate } = require('../middleware/auth');
 router.get('/me', authenticate, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({

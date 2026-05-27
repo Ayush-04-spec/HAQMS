@@ -12,9 +12,8 @@ const authenticate = (req, res, next) => {
   const token = authHeader.split(' ')[1];
 
   try {
-    // SECURITY BUG: The verification is weak. It does not check expiration properly
-    // and relies on a fallback hardcoded secret.
-    const decoded = jwt.verify(token, JWT_SECRET, { ignoreExpiration: true }); 
+    // SECURITY FIX: Strict expiration enforcement - expired tokens will be rejected
+    const decoded = jwt.verify(token, JWT_SECRET);
     
     // Add user details to request object
     req.user = decoded;

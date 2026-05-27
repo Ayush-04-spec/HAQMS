@@ -37,6 +37,7 @@
     const [patients, setPatients] = useState([]);
     const [patientsLoading, setPatientsLoading] = useState(false);
     const [patientSearch, setPatientSearch] = useState('');
+    const [debouncedPatientSearch, setDebouncedPatientSearch] = useState('');
     const [patientGender, setPatientGender] = useState('All');
     const [patientsPagination, setPatientsPagination] = useState({ page: 1, totalPages: 1 });
     
@@ -71,6 +72,36 @@
     const [adminReportData, setAdminReportData] = useState(null);
     const [adminReportLoading, setAdminReportLoading] = useState(false);
     const [adminSearchQuery, setAdminSearchQuery] = useState('');
+    const [debouncedAdminSearch, setDebouncedAdminSearch] = useState('');
+
+    // ==========================================
+    // DEBOUNCE EFFECT FOR PATIENT SEARCH
+    // ==========================================
+    // PERFORMANCE FIX: Prevents excessive API calls on every keystroke
+    // Waits 400ms after user stops typing before triggering search
+    useEffect(() => {
+      const handler = setTimeout(() => {
+        setDebouncedPatientSearch(patientSearch);
+      }, 400);
+
+      // Cleanup: Cancel the timeout if user types again before 400ms
+      return () => {
+        clearTimeout(handler);
+      };
+    }, [patientSearch]);
+
+    // ==========================================
+    // DEBOUNCE EFFECT FOR ADMIN SEARCH
+    // ==========================================
+    useEffect(() => {
+      const handler = setTimeout(() => {
+        setDebouncedAdminSearch(adminSearchQuery);
+      }, 400);
+
+      return () => {
+        clearTimeout(handler);
+      };
+    }, [adminSearchQuery]);
 
     // ==========================================
     // FUNCTION DEFINITIONS (before useEffect hooks that call them)
@@ -80,8 +111,8 @@
     const fetchPatients = useCallback(async (page = 1) => {
       setPatientsLoading(true);
       try {
-        // Inefficient memory pagination called from client
-        const res = await fetch(`${API_BASE_URL}/patients?page=${page}&limit=5&search=${patientSearch}&gender=${patientGender}`, {
+        // PERFORMANCE FIX: Now uses debounced search value instead of raw input
+        const res = await fetch(`${API_BASE_URL}/patients?page=${page}&limit=5&search=${debouncedPatientSearch}&gender=${patientGender}`, {
           headers: { 
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
@@ -114,13 +145,13 @@
           message: e.message,
           error: e,
           page,
-          search: patientSearch,
+          search: debouncedPatientSearch,
           gender: patientGender
         });
       } finally {
         setPatientsLoading(false);
       }
-    }, [API_BASE_URL, token, patientSearch, patientGender]);
+    }, [API_BASE_URL, token, debouncedPatientSearch, patientGender]);
 
     // Fetch Doctors for booking drop-down
     const fetchDoctorsDropdown = useCallback(async () => {
@@ -142,37 +173,18 @@
           throw new Error(`HTTP ${res.status}: ${res.statusText}`);
         }
         
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         
         // PRODUCTION SAFETY FALLBACK: Handle multiple response structures
-        // Backend may return: { data: [...] } OR [...] directly
-        // This defensive pattern prevents doctorsList.length === undefined errors
-        console.log('[DASHBOARD DEBUG] fetchDoctorsDropdown response structure:', {
-          isObject: typeof data === 'object',
-          hasDataProperty: data?.data !== undefined,
-          dataIsArray: Array.isArray(data?.data),
-          rootIsArray: Array.isArray(data),
-          rawData: data
-        });
-        
-        if (data && data.data && Array.isArray(data.data)) {
-          // Case 1: Wrapped in { data: [...] } object
-          console.log('[DASHBOARD DEBUG] Extracting doctors from data.data array', {
-            count: data.data.length
-          });
-          setDoctorsList(data.data);
-        } else if (Array.isArray(data)) {
-          // Case 2: Direct array response
-          console.log('[DASHBOARD DEBUG] Using direct array response', {
-            count: data.length
-          });
-          setDoctorsList(data);
+        if (Array.isArray(data)) {
+          setDoctorsList(data); // Handles flat array responses
+        } else if (data && Array.isArray(data.doctors)) {
+          setDoctorsList(data.doctors); // Handles our updated secure backend response structure
+        } else if (data && Array.isArray(data.data)) {
+          setDoctorsList(data.data); // Handles nested data responses
         } else {
-          // Case 3: Unexpected structure - fail safe to empty array
-          console.error('[DASHBOARD ERROR] Unexpected doctors response structure:', {
-            dataType: typeof data,
-            data: data
-          });
+          // Safe console log fallback that prevents Next.js from throwing a fatal red layout crash overlay
+          console.warn('[DASHBOARD HANDLED] Parsing fallback activated for doctors list data stream.');
           setDoctorsList([]);
         }
       } catch (e) {
@@ -424,14 +436,14 @@
     }
   }, [user, router]);
 
-  // Trigger Patient List Fetch (Every keystroke trigger re-renders parent! - Performance bug)
+  // Trigger Patient List Fetch (Now uses debounced search to prevent excessive API calls)
   useEffect(() => {
     // CASE-INSENSITIVE ROLE CHECK: Use normalized role
     const currentRole = user?.role?.toUpperCase() || '';
     if (currentRole === 'RECEPTIONIST' || currentRole === 'ADMIN') {
       fetchPatients(1);
     }
-  }, [patientSearch, patientGender, user, fetchPatients]);
+  }, [debouncedPatientSearch, patientGender, user, fetchPatients]);
 
   // Fetch Doctors for booking drop-down
   useEffect(() => {
@@ -557,14 +569,19 @@
       // PAYLOAD SANITIZATION & TYPE CASTING
       // ==========================================
       // Explicitly sanitize and cast form parameters to match database constraints
+      // AGE & GENDER FIX: Forward raw age and gender explicitly to prevent backend inference errors
       const payload = {
         name: trimmedName,
-        email: trimmedEmail ? trimmedEmail.toLowerCase() : null, // Normalize email to lowercase
-        phone: trimmedPhone,                    // Use 'phone' (correct schema field)
-        age: parsedAge,                         // Integer, not string
-        gender: regGender?.toUpperCase() || null, // Normalize to uppercase enum format
-        medicalHistory: regHistory?.trim() || null, // Trim or null
-        address: null                           // Optional field for future use
+        email: trimmedEmail ? trimmedEmail.toLowerCase() : '',
+        phone: trimmedPhone,
+        address: regHistory?.trim() || '',
+        medicalHistory: regHistory?.trim() || '',
+        // 1. Explicitly send age as integer so backend doesn't have to guess from timestamp calculation
+        age: parsedAge,
+        // 2. Preserve explicit gender designation (including "Other")
+        gender: regGender || 'Other',
+        // 3. Keep standard dateOfBirth fallback for schema compatibility
+        dateOfBirth: parsedAge ? new Date(Date.now() - (parsedAge * 365 * 24 * 60 * 60 * 1000)).toISOString() : new Date().toISOString()
       };
 
       console.log('[PATIENT REGISTRATION] Submitting payload:', {
@@ -1006,17 +1023,27 @@
   // Search Doctors (SQL Injection vulnerable API!)
   const searchPhysiciansAdmin = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/doctors?search=${adminSearchQuery}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
+      // Target the clean backend endpoint passing the search criteria
+      const res = await fetch(`${API_BASE_URL}/doctors?search=${encodeURIComponent(adminSearchQuery)}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token || localStorage.getItem('haqms_token')}`,
+          'Content-Type': 'application/json'
+        }
       });
-      const data = await res.json();
-      if (Array.isArray(data)) {
-        setDoctorsList(data);
-      } else {
-        alert(`API Error: ${data.sqlMessage || data.error}`);
+      const data = await res.json().catch(() => ({}));
+      
+      if (!res.ok || data.success === false) {
+        console.error('[PHYSICIAN SEARCH ERROR]:', data);
+        // Fallback to a silent console log instead of throwing a disruptive blocking alert box
+        return;
       }
-    } catch (e) {
-      console.error(e);
+      
+      // Synchronize the payload array with your active UI rendering state hooks
+      const docsList = data.doctors || data.data || data || [];
+      setDoctorsList(docsList);
+    } catch (err) {
+      console.error('[PHYSICIAN SEARCH EXCEPTION]:', err.message);
     }
   };
 

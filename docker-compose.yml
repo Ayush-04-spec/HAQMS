@@ -1,20 +1,148 @@
+# ==========================================
+# HAQMS - DOCKER COMPOSE ORCHESTRATION
+# ==========================================
+# Multi-container production deployment configuration
+# Services: PostgreSQL Database, Backend API, Frontend UI
+
 version: '3.8'
 
 services:
-  postgres:
+  # ==========================================
+  # DATABASE SERVICE - PostgreSQL 15
+  # ==========================================
+  db:
     image: postgres:15-alpine
-    container_name: haqms-postgres
+    container_name: haqms-database
+    restart: unless-stopped
+    
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: root
-      POSTGRES_DB: haqms
-      POSTGRES_HOST_AUTH_METHOD: trust
+      # Database credentials (change in production)
+      POSTGRES_USER: haqms_user
+      POSTGRES_PASSWORD: haqms_secure_password_2026
+      POSTGRES_DB: haqms_production
+      
+      # Performance tuning
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=en_US.UTF-8"
+    
     ports:
-      - '5432:5432'
+      - "5432:5432"
+    
     volumes:
-      - pgdata:/var/lib/postgresql/data
-    restart: always
-    command: postgres -c 'max_connections=200'
+      # Persistent data storage
+      - postgres_data:/var/lib/postgresql/data
+      
+    networks:
+      - haqms-network
+    
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U haqms_user -d haqms_production"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
+  # ==========================================
+  # BACKEND SERVICE - Node.js Express API
+  # ==========================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    
+    container_name: haqms-backend
+    restart: unless-stopped
+    
+    depends_on:
+      db:
+        condition: service_healthy
+    
+    environment:
+      # Database connection string
+      DATABASE_URL: postgresql://haqms_user:haqms_secure_password_2026@db:5432/haqms_production
+      
+      # JWT secret for authentication (change in production)
+      JWT_SECRET: production-jwt-secret-key-change-this-in-deployment
+      
+      # Node environment
+      NODE_ENV: production
+      
+      # Server port
+      PORT: 5000
+    
+    ports:
+      - "5000:5000"
+    
+    networks:
+      - haqms-network
+    
+    # Execute database migrations on startup
+    command: >
+      sh -c "
+        echo '[DEPLOYMENT] Waiting for database to be ready...' &&
+        sleep 5 &&
+        echo '[DEPLOYMENT] Running database migrations...' &&
+        npx prisma db push --accept-data-loss &&
+        echo '[DEPLOYMENT] Database schema synchronized successfully.' &&
+        echo '[DEPLOYMENT] Starting backend API server...' &&
+        node src/index.js
+      "
+    
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5000/api/auth/me', (r) => {process.exit(r.statusCode === 401 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ==========================================
+  # FRONTEND SERVICE - Next.js Application
+  # ==========================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:5000/api
+    
+    container_name: haqms-frontend
+    restart: unless-stopped
+    
+    depends_on:
+      backend:
+        condition: service_healthy
+    
+    environment:
+      # API endpoint configuration
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:5000/api
+      
+      # Node environment
+      NODE_ENV: production
+    
+    ports:
+      - "3000:3000"
+    
+    networks:
+      - haqms-network
+    
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+# ==========================================
+# PERSISTENT VOLUMES
+# ==========================================
 volumes:
-  pgdata:
+  postgres_data:
+    driver: local
+    name: haqms_postgres_data
+
+# ==========================================
+# NETWORK CONFIGURATION
+# ==========================================
+networks:
+  haqms-network:
+    driver: bridge
+    name: haqms_network

@@ -16,16 +16,21 @@ model User {
   password  String
   role      String   // 'admin', 'doctor', 'receptionist'
   name      String
+  phone     String?
+  age       Int?
+  gender    String?  // 'MALE', 'FEMALE'
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   // Relations
   doctorProfile Doctor?
   appointments  Appointment[] @relation("DoctorAppointments")
+  patient       Patient?
 }
 
 model Patient {
   id             Int      @id @default(autoincrement())
+  userId         Int?     @unique
   name           String
   email          String?  @unique
   phone          String
@@ -36,6 +41,7 @@ model Patient {
   updatedAt      DateTime @updatedAt
 
   // Relations
+  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
   appointments Appointment[]
   queueTokens  QueueToken[]
 }
